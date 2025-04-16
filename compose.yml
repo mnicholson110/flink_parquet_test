@@ -137,20 +137,6 @@ services:
       postgres:
         condition: service_healthy
 
-  redpanda-console:
-    image: docker.redpanda.com/vectorized/console:latest
-    container_name: redpanda-console
-    hostname: redpanda-console
-    ports:
-      - "8088:8080"
-    environment:
-      KAFKA_BROKERS: "kafka:29092"
-      SCHEMAREGISTRY_ENABLED: "false"
-      CONNECT_ENABLED: "false"
-      KAFKA_AUTHENTICATION_METHOD: "none"
-    depends_on:
-      - kafka
-
   flink-jobmanager:
     container_name: flink-jobmanager
     hostname: jobmanager
@@ -163,7 +149,6 @@ services:
     depends_on:
       - kafka
       - debezium-init
-      - redpanda-console
     environment:
       KAFKA_SOURCE_ADDR: 'kafka:29092'
       KAFKA_CONS_GROUP_ID: 'flink-group-id'

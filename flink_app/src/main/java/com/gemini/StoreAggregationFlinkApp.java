@@ -1,7 +1,7 @@
 package com.gemini;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -30,6 +30,7 @@ public class StoreAggregationFlinkApp
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(3);
+        env.enableCheckpointing(Duration.ofSeconds(10).toMillis());
 
         KafkaSource<OrderData> source = KafkaSource.<OrderData>builder()
                                             .setBootstrapServers(kafkaSourceAddr)
@@ -45,8 +46,6 @@ public class StoreAggregationFlinkApp
                                            AvroParquetWriters.forReflectRecord(OrderData.class))
                                        .withBucketAssigner(new OrderDataBucketAssigner())
                                        .build();
-
-        env.enableCheckpointing(5000);
 
         env.fromSource(source, WatermarkStrategy.noWatermarks(), "Kafka input")
             .sinkTo(sink);
@@ -118,8 +117,10 @@ public class StoreAggregationFlinkApp
 
     public static class OrderDataBucketAssigner implements BucketAssigner<OrderData, String>
     {
-        private static final DateTimeFormatter formatter =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm-ss").withZone(ZoneId.of("UTC"));
+        private static final DateTimeFormatter day_formatter =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd").withZone(ZoneId.of("UTC"));
+        private static final DateTimeFormatter time_formatter =
+            DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.of("UTC"));
 
         @Override
         public String getBucketId(OrderData order, Context context)
@@ -128,7 +129,7 @@ public class StoreAggregationFlinkApp
             long bucketStartMs = (currentTimeMs / 10000) * 10000;
             Instant bucketInstant = Instant.ofEpochMilli(bucketStartMs);
             String store = order.storeId;
-            return String.format("storeId=%s/timestamp=%s", store, formatter.format(bucketInstant));
+            return String.format("storeId=%s/date=%s/time=%s", store, day_formatter.format(bucketInstant), time_formatter.format(bucketInstant));
         }
 
         @Override
