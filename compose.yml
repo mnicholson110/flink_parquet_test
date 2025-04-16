@@ -1,0 +1,192 @@
+services:
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    hostname: kafka
+    container_name: kafka
+    ports:
+      - '9092:9092'
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,LISTENER:PLAINTEXT,EXTERNAL:PLAINTEXT'
+      KAFKA_ADVERTISED_LISTENERS: 'LISTENER://kafka:29092,EXTERNAL://localhost:9092'
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:29093'
+      KAFKA_LISTENERS: 'CONTROLLER://kafka:29093,LISTENER://kafka:29092,EXTERNAL://0.0.0.0:9092'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'LISTENER'
+    # Replace CLUSTER_ID with a unique base64 UUID using "bin/kafka-storage.sh random-uuid"
+    # See https://docs.confluent.io/kafka/operations-tools/kafka-tools.html#kafka-storage-sh
+      CLUSTER_ID: 'venpz0h7QE2i8DFV5NZMvQ'
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: true
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  postgres:
+    image: postgres:latest
+    restart: always
+    hostname: postgres
+    container_name: postgres
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: order_db
+    command: ['postgres', '-c', 'wal_level=logical']
+    volumes:
+      - ./postgres:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', 'postgres']
+      start_period: 5s
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  debezium:
+    image: quay.io/debezium/connect:latest
+    restart: always
+    hostname: debezium
+    container_name: debezium
+    ports:
+      - '8083:8083'
+    depends_on:
+      - kafka
+      - postgres
+      - mock-data
+    environment:
+      BOOTSTRAP_SERVERS: kafka:29092
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: debezium_configs
+      OFFSET_STORAGE_TOPIC: debezium_offsets
+      STATUS_STORAGE_TOPIC: debezium_statuses
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'curl',
+          '--silent',
+          '--fail',
+          '-X',
+          'GET',
+          'http://localhost:8083/connectors'
+        ]
+      start_period: 0s
+      interval: 2s
+      timeout: 3s 
+      retries: 5
+
+  debezium-init:
+    image: curlimages/curl:latest
+    restart: no
+    container_name: debezium-init 
+    depends_on:
+      debezium:
+        condition: service_healthy
+    entrypoint: [
+                  'curl',
+                  '-X','POST',
+                  '--location','http://debezium:8083/connectors',
+                  '-H','Content-Type: application/json',
+                  '-H','Accept: application/json','-d',
+                  '{
+                    "config":{
+                      "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+                      "tasks.max": "1",
+                      "topic.prefix": "order_db",
+                      "database.hostname": "postgres",
+                      "database.port": "5432",
+                      "database.user": "postgres",
+                      "database.password": "postgres",
+                      "database.dbname": "order_db",
+                      "database.server.name": "postgres",
+                      "database.history.kafka.bootstrap.servers": "kafka:9092",
+                      "plugin.name": "pgoutput",
+                      "topic.creation.default.replication.factor": 1,
+                      "topic.creation.enable": "true",
+                      "topic.creation.default.partitions": 3,
+                      "decimal.handling.mode": "string",
+                      "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+                      "key.converter.schemas.enable": "false",
+                      "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+                      "value.converter.schemas.enable": "false",
+                      "transforms": "unwrap",
+                      "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+                      "transforms.unwrap.add.fields": "op,table,lsn,source.ts_ms",
+                      "transforms.unwrap.add.headers": "db"
+                    },
+                    "name": "order-connector"
+                  }'
+                ]
+
+  mock-data:
+    build:
+      context: ./mock_data
+      dockerfile: Dockerfile
+    container_name: mock-data
+    restart: no
+    environment:
+      INITIAL_ORDER_COUNT_K: 100
+      ORDER_UPDATE_COUNT_K: 20
+      NEW_ORDER_COUNT_K: 10
+      STORE_COUNT: 1000
+      HOST: postgres
+      PORT: 5432
+      USER: postgres
+      PASSWORD: postgres
+      DBNAME: order_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redpanda-console:
+    image: docker.redpanda.com/vectorized/console:latest
+    container_name: redpanda-console
+    hostname: redpanda-console
+    ports:
+      - "8088:8080"
+    environment:
+      KAFKA_BROKERS: "kafka:29092"
+      SCHEMAREGISTRY_ENABLED: "false"
+      CONNECT_ENABLED: "false"
+      KAFKA_AUTHENTICATION_METHOD: "none"
+    depends_on:
+      - kafka
+
+  flink-jobmanager:
+    container_name: flink-jobmanager
+    hostname: jobmanager
+    ports:
+      - '8081:8081'
+    command: standalone-job --jars /opt/flink/userlib/flink-aggregation-app.jar
+    build: 
+      context: ./flink_app
+      dockerfile: Dockerfile
+    depends_on:
+      - kafka
+      - debezium-init
+      - redpanda-console
+    environment:
+      KAFKA_SOURCE_ADDR: 'kafka:29092'
+      KAFKA_SINK_ADDR: 'kafka:29092'
+      KAFKA_CONS_GROUP_ID: 'flink-group-id'
+      INPUT_TOPIC: 'order_db.order_schema.order'
+      OUTPUT_TOPIC: 'aggregated_store_orders'
+      FLINK_PROPERTIES: |-
+        jobmanager.rpc.address: jobmanager
+        parallelism.default: 3
+    volumes:
+      - ./output:/opt/flink/output
+
+  flink-taskmanager:
+    image: flink:1.20
+    container_name: flink-taskmanager
+    command: taskmanager
+    scale: 1
+    depends_on:
+      - flink-jobmanager
+    environment:
+      FLINK_PROPERTIES: |-
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 3
+        parallelism.default: 3
+    volumes:
+      - ./output:/opt/flink/output
