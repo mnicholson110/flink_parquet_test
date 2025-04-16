@@ -3,3 +3,4 @@ flink_app/.idea
 flink_app/.project
 flink_app/.settings
 flink_app/target
+output/

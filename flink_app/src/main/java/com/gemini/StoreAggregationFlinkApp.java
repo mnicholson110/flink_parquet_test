@@ -5,8 +5,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import org.apache.avro.Schema;
-import org.apache.avro.reflect.ReflectData;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.serialization.DeserializationSchema;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
@@ -15,7 +13,6 @@ import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.core.io.SimpleVersionedSerializer;
-import org.apache.flink.formats.parquet.ParquetWriterFactory;
 import org.apache.flink.formats.parquet.avro.AvroParquetWriters;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
@@ -41,20 +38,14 @@ public class StoreAggregationFlinkApp
                                             .setValueOnlyDeserializer(new OrderDataDeserializationSchema())
                                             .build();
 
-        // Define the Avro schema for OrderData
-        // Schema schema = ReflectData.get().getSchema(OrderData.class);
-
-        // Create Parquet writer factory (non-deprecated)
-        ParquetWriterFactory<OrderData> parquetWriterFactory = AvroParquetWriters.forReflectRecord(OrderData.class);
-
         FileSink<OrderData> sink = FileSink
                                        .forBulkFormat(
-                                           new Path("output/parquet"),
-                                           parquetWriterFactory)
+                                           new Path("output/"),
+                                           AvroParquetWriters.forReflectRecord(OrderData.class))
                                        .withBucketAssigner(new TenSecondBucketAssigner())
                                        .build();
 
-        env.enableCheckpointing(10_000);
+        env.enableCheckpointing(5000);
 
         env.fromSource(source, WatermarkStrategy.noWatermarks(), "Kafka input")
             .sinkTo(sink);
@@ -126,7 +117,6 @@ public class StoreAggregationFlinkApp
 
     public static class TenSecondBucketAssigner implements BucketAssigner<OrderData, String>
     {
-        private static final long BUCKET_INTERVAL_MS = 10_000;
         private static final DateTimeFormatter formatter =
             DateTimeFormatter.ofPattern("yyyy-MM-dd--HH-mm-ss").withZone(ZoneId.of("UTC"));
 
@@ -134,7 +124,7 @@ public class StoreAggregationFlinkApp
         public String getBucketId(OrderData element, Context context)
         {
             long currentTimeMs = System.currentTimeMillis();
-            long bucketStartMs = (currentTimeMs / BUCKET_INTERVAL_MS) * BUCKET_INTERVAL_MS;
+            long bucketStartMs = (currentTimeMs / 10000) * 10000;
             Instant bucketInstant = Instant.ofEpochMilli(bucketStartMs);
             return formatter.format(bucketInstant);
         }
