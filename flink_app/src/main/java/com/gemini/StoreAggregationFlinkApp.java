@@ -18,6 +18,7 @@ import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.filesystem.BucketAssigner;
+import org.apache.flink.streaming.api.functions.sink.filesystem.bucketassigners.SimpleVersionedStringSerializer;
 
 public class StoreAggregationFlinkApp
 {
@@ -42,7 +43,7 @@ public class StoreAggregationFlinkApp
                                        .forBulkFormat(
                                            new Path("output/"),
                                            AvroParquetWriters.forReflectRecord(OrderData.class))
-                                       .withBucketAssigner(new TenSecondBucketAssigner())
+                                       .withBucketAssigner(new OrderDataBucketAssigner())
                                        .build();
 
         env.enableCheckpointing(5000);
@@ -115,62 +116,25 @@ public class StoreAggregationFlinkApp
         }
     }
 
-    public static class TenSecondBucketAssigner implements BucketAssigner<OrderData, String>
+    public static class OrderDataBucketAssigner implements BucketAssigner<OrderData, String>
     {
         private static final DateTimeFormatter formatter =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd--HH-mm-ss").withZone(ZoneId.of("UTC"));
+            DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm-ss").withZone(ZoneId.of("UTC"));
 
         @Override
-        public String getBucketId(OrderData element, Context context)
+        public String getBucketId(OrderData order, Context context)
         {
             long currentTimeMs = System.currentTimeMillis();
             long bucketStartMs = (currentTimeMs / 10000) * 10000;
             Instant bucketInstant = Instant.ofEpochMilli(bucketStartMs);
-            return formatter.format(bucketInstant);
-        }
-
-        @Override
-        public String toString()
-        {
-            return "TenSecondBucketAssigner";
+            String store = order.storeId;
+            return String.format("storeId=%s/timestamp=%s", store, formatter.format(bucketInstant));
         }
 
         @Override
         public SimpleVersionedSerializer<String> getSerializer()
         {
-            return new SimpleVersionedSerializer<String>() {
-                private static final int VERSION = 1;
-
-                @Override
-                public int getVersion()
-                {
-                    return VERSION;
-                }
-
-                @Override
-                public byte[] serialize(String bucketId) throws IOException
-                {
-                    if (bucketId == null)
-                    {
-                        return new byte[0];
-                    }
-                    return bucketId.getBytes(StandardCharsets.UTF_8);
-                }
-
-                @Override
-                public String deserialize(int version, byte[] serialized) throws IOException
-                {
-                    if (version != VERSION)
-                    {
-                        throw new IOException("Unsupported version: " + version);
-                    }
-                    if (serialized.length == 0)
-                    {
-                        return null;
-                    }
-                    return new String(serialized, StandardCharsets.UTF_8);
-                }
-            };
+            return SimpleVersionedStringSerializer.INSTANCE;
         }
     }
 }
