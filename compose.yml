@@ -166,10 +166,8 @@ services:
       - redpanda-console
     environment:
       KAFKA_SOURCE_ADDR: 'kafka:29092'
-      KAFKA_SINK_ADDR: 'kafka:29092'
       KAFKA_CONS_GROUP_ID: 'flink-group-id'
       INPUT_TOPIC: 'order_db.order_schema.order'
-      OUTPUT_TOPIC: 'aggregated_store_orders'
       FLINK_PROPERTIES: |-
         jobmanager.rpc.address: jobmanager
         parallelism.default: 3

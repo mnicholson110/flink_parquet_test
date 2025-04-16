@@ -42,7 +42,7 @@ public class StoreAggregationFlinkApp
                                             .build();
 
         // Define the Avro schema for OrderData
-        Schema schema = ReflectData.get().getSchema(OrderData.class);
+        // Schema schema = ReflectData.get().getSchema(OrderData.class);
 
         // Create Parquet writer factory (non-deprecated)
         ParquetWriterFactory<OrderData> parquetWriterFactory = AvroParquetWriters.forReflectRecord(OrderData.class);
@@ -53,6 +53,8 @@ public class StoreAggregationFlinkApp
                                            parquetWriterFactory)
                                        .withBucketAssigner(new TenSecondBucketAssigner())
                                        .build();
+
+        env.enableCheckpointing(10_000);
 
         env.fromSource(source, WatermarkStrategy.noWatermarks(), "Kafka input")
             .sinkTo(sink);
